@@ -1,0 +1,41 @@
+<extension xmlns="http://ns.adobe.com/air/extension/51.0">
+    <id>br.com.redesurftank.androidwebsocket</id>
+    <versionNumber>1</versionNumber>
+    <platforms>
+        <platform name="Android-ARM">
+            <applicationDeployment>
+                <nativeLibrary>classes.jar</nativeLibrary>
+                <initializer>br.com.redesurftank.AndroidWebSocket.AndroidWebSocketExtension</initializer>
+            </applicationDeployment>
+        </platform>
+        <platform name="Android-ARM64">
+            <applicationDeployment>
+                <nativeLibrary>classes.jar</nativeLibrary>
+                <initializer>br.com.redesurftank.AndroidWebSocket.AndroidWebSocketExtension</initializer>
+            </applicationDeployment>
+        </platform>
+        <platform name="Android-x86">
+            <applicationDeployment>
+                <nativeLibrary>classes.jar</nativeLibrary>
+                <initializer>br.com.redesurftank.AndroidWebSocket.AndroidWebSocketExtension</initializer>
+            </applicationDeployment>
+        </platform>
+        <platform name="Android-x64">
+            <applicationDeployment>
+                <nativeLibrary>classes.jar</nativeLibrary>
+                <initializer>br.com.redesurftank.AndroidWebSocket.AndroidWebSocketExtension</initializer>
+            </applicationDeployment>
+        </platform>
+        <platform name="Windows-x86">
+            <applicationDeployment>
+                <nativeLibrary>AneWebSocket.dll</nativeLibrary>
+                <initializer>InitExtension</initializer>
+                <finalizer>DestroyExtension</finalizer>
+            </applicationDeployment>
+        </platform>
+        <platform name="default">
+            <applicationDeployment />
+        </platform>
+    </platforms>
+</extension>
+  
