@@ -1,7 +1,6 @@
 /target/
 /META-INF/
 /.scannerwork/
-/.idea/
 /out/*
 /sqls/*
 /loadingAir/src/LoadingAir.airi
