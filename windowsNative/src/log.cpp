@@ -6,7 +6,7 @@ FILE *logFile = nullptr;
 
 void initLog() {
     try {
-        fopen_s(&logFile, "C:/debug/dll_log.txt", "a");
+        fopen_s(&logFile, "C:/debug/websocket_dll_log.txt", "a");
         if (logFile != nullptr) {
             fprintf(logFile, "Log initialized\n");
             fflush(logFile);

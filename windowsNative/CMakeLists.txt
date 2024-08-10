@@ -42,8 +42,6 @@ add_library(AneWebSocket SHARED
         src/log.cpp
         src/FileLoggerStream.cpp
         src/FileLoggerStream.h
-        src/UrlLoaderNativeLibrary.h
-        src/UrlLoaderNativeLibrary.cpp
 )
 
 target_link_libraries(AneWebSocket PRIVATE ${LIBRARY_PATH}/FlashRuntimeExtensions.lib)

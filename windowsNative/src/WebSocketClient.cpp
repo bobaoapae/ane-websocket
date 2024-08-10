@@ -7,18 +7,20 @@
 #include <boost/asio/ssl.hpp>
 
 #include "log.h"
-#include "UrlLoaderNativeLibrary.h"
 
 WebSocketClient::WebSocketClient() : m_open(false), m_ctx(nullptr), m_debugMode(false) {
     writeLog("WebSocketClient created");
     m_client.set_access_channels(websocketpp::log::alevel::all);
     m_client.clear_access_channels(websocketpp::log::alevel::frame_payload);
+    m_client.clear_access_channels(websocketpp::log::alevel::frame_header);
+    m_client.clear_access_channels(websocketpp::log::alevel::message_header);
+    m_client.clear_access_channels(websocketpp::log::alevel::message_payload);
     m_client.init_asio();
     m_client.set_tls_init_handler([this](websocketpp::connection_hdl hdl) {
         return on_tls_init(hdl);
     });
     m_client.set_open_handler([this](websocketpp::connection_hdl hdl) {
-        std::lock_guard<std::mutex> guard(m_lock);
+        std::lock_guard guard(m_lock);
         m_hdl = hdl;
         m_open = true;
         dispatchEvent("connected", "Connection opened");
@@ -35,6 +37,8 @@ WebSocketClient::WebSocketClient() : m_open(false), m_ctx(nullptr), m_debugMode(
     m_client.set_fail_handler([this](websocketpp::connection_hdl hdl) {
         on_fail(hdl);
     });
+
+    m_client.set_open_handshake_timeout(3000);
 }
 
 websocketpp::lib::shared_ptr<boost::asio::ssl::context> WebSocketClient::on_tls_init(websocketpp::connection_hdl hdl) {
@@ -45,7 +49,12 @@ websocketpp::lib::shared_ptr<boost::asio::ssl::context> WebSocketClient::on_tls_
         ctx->set_options(boost::asio::ssl::context::default_workarounds |
                          boost::asio::ssl::context::no_sslv2 |
                          boost::asio::ssl::context::no_sslv3 |
-                         boost::asio::ssl::context::single_dh_use);
+                         boost::asio::ssl::context::single_dh_use |
+                         boost::asio::ssl::context::tlsv11 |
+                         boost::asio::ssl::context::tlsv12);
+
+        // Ignorar verificação de certificado
+        ctx->set_verify_mode(boost::asio::ssl::verify_none);
     } catch (std::exception &e) {
         std::cout << "Error in context pointer: " << e.what() << std::endl;
     }
@@ -116,11 +125,6 @@ void WebSocketClient::sendMessage(websocketpp::frame::opcode::value opcode, cons
 
 void WebSocketClient::sendMessage(websocketpp::frame::opcode::value opcode, const std::vector<uint8_t> &payload) {
     writeLog("sendMessage called");
-    try {
-        callInitializerLoader();
-    } catch (std::exception &e) {
-        writeLog(e.what());
-    }
     std::lock_guard<std::mutex> guard(m_lock);
     if (m_open) {
         m_client.send(m_hdl, payload.data(), payload.size(), opcode);
