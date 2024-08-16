@@ -2,10 +2,11 @@ cmake_minimum_required(VERSION 3.28)
 project(AneWebSocket)
 
 set(CMAKE_CXX_STANDARD 17)
+add_definitions(-D_WIN32_WINNT=0x0601)
 
 # Definindo as opções de compilação para Debug e Release
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D_ITERATOR_DEBUG_LEVEL=2 /MDd")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /D_ITERATOR_DEBUG_LEVEL=0 /MD")
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D_ITERATOR_DEBUG_LEVEL=2 /MTd")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /D_ITERATOR_DEBUG_LEVEL=0 /MT")
 
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(STATUS "Compiling for x64")
@@ -28,7 +29,7 @@ link_directories(${LIBRARY_PATH})
 include_directories(${INCLUDE_PATH})
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
-find_package(Boost REQUIRED COMPONENTS thread system uuid)
+find_package(Boost REQUIRED COMPONENTS thread system uuid beast)
 include_directories(${Boost_INCLUDE_DIRS})
 
 find_package(OpenSSL REQUIRED)
@@ -45,8 +46,7 @@ add_library(AneWebSocket SHARED
 )
 
 target_link_libraries(AneWebSocket PRIVATE ${LIBRARY_PATH}/FlashRuntimeExtensions.lib)
-find_package(websocketpp CONFIG REQUIRED)
-target_link_libraries(AneWebSocket PUBLIC websocketpp::websocketpp ${Boost_LIBRARIES} OpenSSL::SSL PRIVATE ws2_32 bcrypt)
+target_link_libraries(AneWebSocket PUBLIC ${Boost_LIBRARIES} OpenSSL::SSL PRIVATE ws2_32 bcrypt)
 
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /GL")
 set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF /DEBUG /PDBALTPATH:%_PDB%")

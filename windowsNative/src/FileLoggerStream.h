@@ -6,14 +6,11 @@
 #define FILELOGGERSTREAM_H
 
 #include <fstream>
-#include <iostream>
-#include <websocketpp/config/asio_client.hpp>
-#include <websocketpp/client.hpp>
 #include <boost/asio/ssl.hpp>
 
 class FileLoggerStream : public std::ostream {
 public:
-    explicit FileLoggerStream(const std::string& filename)
+    explicit FileLoggerStream(const std::string &filename)
         : std::ostream(nullptr), m_file(filename, std::ios_base::app) {
         if (!m_file.is_open()) {
             throw std::runtime_error("Unable to open log file: " + filename);

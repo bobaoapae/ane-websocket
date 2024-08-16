@@ -42,7 +42,7 @@ FREObject connectWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObj
     FREGetObjectAsUTF8(argv[0], &uriLength, &uri);
 
     if (websocketClient != nullptr) {
-        websocketClient->close(websocketpp::close::status::abnormal_close, "Reconnecting");
+        websocketClient->close(boost::beast::websocket::close_code::abnormal, "Reconnecting");
         websocketClient = nullptr;
     }
 
@@ -62,7 +62,11 @@ FREObject closeWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObjec
             FREGetObjectAsUint32(argv[0], &closeCode);
         }
 
-        websocketClient->close(websocketpp::close::status::internal_endpoint_error, std::to_string(closeCode));
+        // Mapeia o closeCode para boost::beast::websocket::close_code
+        auto beastCloseCode = static_cast<boost::beast::websocket::close_code>(closeCode);
+
+        // Fecha o WebSocket usando o código de fechamento mapeado
+        websocketClient->close(beastCloseCode, "Connection closed");
     }
     return nullptr;
 }
@@ -82,13 +86,13 @@ FREObject sendMessageWebSocket(FREContext ctx, void *funcData, uint32_t argc, FR
         const uint8_t *payload;
         FREGetObjectAsUTF8(argv[1], &payloadLength, &payload);
 
-        websocketClient->sendMessage(websocketpp::frame::opcode::text, std::string(reinterpret_cast<const char *>(payload), payloadLength));
+        websocketClient->sendMessage(std::string(reinterpret_cast<const char *>(payload), payloadLength));
     } else if (objectType == FRE_TYPE_BYTEARRAY) {
         FREByteArray byteArray;
         FREAcquireByteArray(argv[1], &byteArray);
 
-        std::vector<uint8_t> payload(byteArray.bytes, byteArray.bytes + byteArray.length);
-        websocketClient->sendMessage(websocketpp::frame::opcode::binary, payload);
+        std::vector payload(byteArray.bytes, byteArray.bytes + byteArray.length);
+        websocketClient->sendMessage(payload);
 
         FREReleaseByteArray(argv[1]);
     }
