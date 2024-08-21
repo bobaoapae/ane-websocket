@@ -1,10 +1,14 @@
 #include "WebSocketClient.h"
+
+#include <future>
+
 #include "log.h"
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
+#include <utility>
 
 void ssl_info_callback(const SSL *ssl, int where, int ret) {
     const char *str = (where & SSL_ST_CONNECT) ? "SSL_connect" : (where & SSL_ST_ACCEPT) ? "SSL_accept" : "undefined";
@@ -23,7 +27,7 @@ void ssl_info_callback(const SSL *ssl, int where, int ret) {
 }
 
 WebSocketClient::WebSocketClient()
-    : m_open(false), m_disconnectDispatched(false), m_ctx(nullptr), m_debugMode(false), m_resolver(m_ioc), m_ws(m_ioc, m_ssl_context) {
+    : m_open(false), m_disconnectDispatched(false), m_ctx(nullptr), m_debugMode(false), m_resolver(m_ioc), m_ws(m_ioc, m_ssl_context), m_buffer(m_readBuffer) {
     writeLog("WebSocketClient created");
     m_ssl_context.set_options(
         boost::asio::ssl::context::default_workarounds |
@@ -44,6 +48,12 @@ WebSocketClient::WebSocketClient()
 
     m_ssl_context.set_verify_mode(boost::asio::ssl::verify_none); // Desabilitar verificação de certificado para depuração
     SSL_CTX_set_info_callback(m_ssl_context.native_handle(), &ssl_info_callback);
+}
+
+WebSocketClient::~WebSocketClient() {
+    m_open = false;
+    m_sending_thread.detach();
+    m_read_thread.detach();
 }
 
 void WebSocketClient::connect(const std::string &uri) {
@@ -173,49 +183,97 @@ void WebSocketClient::on_websocket_handshake_complete(const boost::system::error
 
     m_open = true;
     dispatchEvent("connected", "Connection opened");
-    do_read();
+    m_sending_thread = std::thread(&WebSocketClient::sendLoop, this);
+    m_read_thread = std::thread(&WebSocketClient::readLoop, this);
 }
 
+void WebSocketClient::sendLoop() {
+    writeLog("sendLoop started");
+    while (m_open) {
+        std::vector<uint8_t> payload; {
+            std::unique_lock lock(m_lock_write);
+            m_cv.wait(lock, [this] { return !m_send_message_queue.empty() || !m_open; });
 
-void WebSocketClient::do_read() {
-    m_ws.async_read(m_buffer, [this](const boost::beast::error_code &ec, std::size_t bytes_transferred) {
-        boost::ignore_unused(bytes_transferred);
+            if (!m_open && m_send_message_queue.empty()) {
+                break;
+            }
 
-        if (ec == boost::beast::websocket::error::closed) {
-            writeLog("Connection closed cleanly by peer.");
-
-            // Obter o código de fechamento e o motivo
-            const auto close_code = m_ws.reason().code;
-            const auto close_reason = m_ws.reason().reason;
-
-            dispatchDisconnectEvent(close_code, close_reason.c_str());
-            cleanup();
-            return;
+            payload = std::move(m_send_message_queue.front());
+            m_send_message_queue.pop();
         }
 
-        if (ec) {
-            writeLog(("Read error: " + ec.message()).c_str());
+        try {
+            m_ws.binary(true);
+            m_ws.write(boost::asio::buffer(payload));
+            writeLog("Message sent successfully");
+        } catch (const std::exception &e) {
+            std::string error = e.what();
+            writeLog(("sendMessage exception: " + error).c_str());
+        }
+    }
+    writeLog("sendLoop finished");
+}
+
+void WebSocketClient::readLoop() {
+    writeLog("readLoop started");
+    while (m_open) {
+        try {
+            // Limpa o buffer antes de cada leitura
+            m_buffer.consume(m_buffer.size());
+
+            // Variável para armazenar se o frame é o último fragmento
+            bool is_final_frame = false;
+
+            // Vetor para armazenar os dados do frame completo
+            std::vector<uint8_t> full_payload;
+
+            while (!is_final_frame) {
+                // Executa a leitura síncrona de um fragmento
+                std::size_t bytes_transferred = m_ws.read(m_buffer);
+
+                // Verifica se o fragmento lido é o último
+                is_final_frame = m_ws.is_message_done();
+
+                // Adiciona o fragmento ao payload completo
+                full_payload.insert(full_payload.end(),
+                                    boost::asio::buffer_cast<const uint8_t *>(m_buffer.data()),
+                                    boost::asio::buffer_cast<const uint8_t *>(m_buffer.data()) + m_buffer.size());
+
+                // Log para indicar se o frame é parcial ou completo
+                if (is_final_frame) {
+                    writeLog("Received final frame fragment.");
+                } else {
+                    writeLog("Received partial frame fragment.");
+                }
+
+                // Limpa o buffer para a próxima leitura
+                m_buffer.consume(m_buffer.size());
+            }
+
+            // Gera um UUID para a mensagem
+            enqueueMessage(full_payload);
+            dispatchEvent("nextMessage", "");
+        } catch (const boost::beast::system_error &e) {
+            if (e.code() == boost::beast::websocket::error::closed) {
+                writeLog("Connection closed cleanly by peer.");
+
+                // Obter o código de fechamento e o motivo
+                const auto reason = m_ws.reason();
+                const auto close_code = reason.code;
+                const auto close_reason = reason.reason;
+
+                dispatchDisconnectEvent(close_code, close_reason.c_str());
+                cleanup();
+                break; // Sai do loop, pois a conexão foi fechada
+            }
+            writeLog(("Read error: " + e.code().message()).c_str());
 
             // Tratar o erro como um evento de desconexão
-            dispatchDisconnectEvent(1006, "Network error during read: " + ec.message());
+            dispatchDisconnectEvent(1006, "Network error during read: " + e.code().message());
             cleanup();
-            return;
+            break; // Sai do loop em caso de erro
         }
-
-        // Converte o buffer para um vetor de uint8_t
-        const std::vector<uint8_t> payload{
-            boost::asio::buffer_cast<const uint8_t *>(m_buffer.data()),
-            boost::asio::buffer_cast<const uint8_t *>(m_buffer.data()) + m_buffer.size()
-        };
-
-        m_buffer.consume(m_buffer.size());
-
-        const auto uuid = generateUUID();
-        storeMessage(uuid, payload);
-        dispatchEvent("binaryMessageFast", uuid);
-
-        do_read();
-    });
+    }
 }
 
 void WebSocketClient::close(const boost::beast::websocket::close_code code, const std::string &reason) {
@@ -231,38 +289,27 @@ void WebSocketClient::close(const boost::beast::websocket::close_code code, cons
 void WebSocketClient::sendMessage(const std::string &payload) {
     writeLog("sendMessage called");
     if (m_open) {
-        std::lock_guard lock(m_lock_write);
-        m_ws.text(true);
-        m_ws.async_write(boost::asio::buffer(payload),
-                         [this](boost::system::error_code ec, std::size_t) {
-                             if (ec) {
-                                 writeLog(("Write error: " + ec.message()).c_str());
-
-                                 dispatchDisconnectEvent(1006, "Network error during write: " + ec.message());
-                                 cleanup();
-                             } else {
-                                 writeLog("Message sent successfully");
-                             }
-                         });
+        std::future asyncWrapper = std::async(std::launch::async, [this, payload] {
+            try {
+                m_ws.text(true);
+                m_ws.write(boost::asio::buffer(payload));
+                writeLog("Message sent successfully");
+            } catch (std::exception const &e) {
+                std::string error = e.what();
+                writeLog(("sendMessage exception: " + error).c_str());
+            }
+        });
     }
 }
 
 void WebSocketClient::sendMessage(const std::vector<uint8_t> &payload) {
     writeLog("sendMessage called");
     if (m_open) {
-        std::lock_guard lock(m_lock_write);
-        m_ws.binary(true);
-        m_ws.async_write(boost::asio::buffer(payload),
-                         [this](boost::system::error_code ec, std::size_t) {
-                             if (ec) {
-                                 writeLog(("Write error: " + ec.message()).c_str());
-
-                                 dispatchDisconnectEvent(1006, "Network error during write: " + ec.message());
-                                 cleanup();
-                             } else {
-                                 writeLog("Message sent successfully");
-                             }
-                         });
+        {
+            std::lock_guard guard(m_lock_write);
+            m_send_message_queue.push(payload);
+        }
+        m_cv.notify_one();
     }
 }
 
@@ -274,25 +321,34 @@ void WebSocketClient::setDebugMode(const bool debugMode) {
     m_debugMode = debugMode;
 }
 
-std::vector<uint8_t> WebSocketClient::getMessage(const std::string &uuid) {
+std::optional<std::vector<uint8_t> > WebSocketClient::getNextMessage() {
     std::lock_guard guard(m_lock_messages);
-    if (const auto it = message_map.find(uuid); it != message_map.end()) {
-        std::vector<uint8_t> message = it->second;
-        message_map.erase(it);
-        return message;
+    if (m_received_message_queue.empty()) {
+        return std::nullopt;
     }
-    return {};
+
+    // Pega a próxima mensagem da fila
+    std::vector<uint8_t> message = std::move(m_received_message_queue.front());
+    m_received_message_queue.pop();
+
+    return message;
 }
 
-void WebSocketClient::storeMessage(const std::string &uuid, const std::vector<uint8_t> &message) {
+
+void WebSocketClient::enqueueMessage(const std::vector<uint8_t> &message) {
     std::lock_guard guard(m_lock_messages);
-    message_map[uuid] = message;
+    m_received_message_queue.push(message);
 }
+
 
 void WebSocketClient::cleanup() {
     writeLog("cleanup called");
     m_open = false;
-    message_map.clear();
+    m_ioc.stop();
+    std::queue<std::vector<uint8_t> > empty;
+    std::swap(m_send_message_queue, empty);
+    std::queue<std::vector<uint8_t> > empty2;
+    std::swap(m_received_message_queue, empty2);
 }
 
 void WebSocketClient::dispatchDisconnectEvent(const uint16_t &code, const std::string &reason) {

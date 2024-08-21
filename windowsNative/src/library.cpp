@@ -91,7 +91,7 @@ FREObject sendMessageWebSocket(FREContext ctx, void *funcData, uint32_t argc, FR
         FREByteArray byteArray;
         FREAcquireByteArray(argv[1], &byteArray);
 
-        std::vector payload(byteArray.bytes, byteArray.bytes + byteArray.length);
+        const std::vector payload(byteArray.bytes, byteArray.bytes + byteArray.length);
         websocketClient->sendMessage(payload);
 
         FREReleaseByteArray(argv[1]);
@@ -102,20 +102,20 @@ FREObject sendMessageWebSocket(FREContext ctx, void *funcData, uint32_t argc, FR
 
 FREObject getByteArrayMessage(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
     writeLog("getByteArrayMessage called");
-    if (argc < 1 || websocketClient == nullptr) return nullptr;
+    if (websocketClient == nullptr) return nullptr;
 
-    uint32_t uuidLength;
-    const uint8_t *uuid;
-    FREGetObjectAsUTF8(argv[0], &uuidLength, &uuid);
-    std::string uuidStr(reinterpret_cast<const char *>(uuid), uuidLength);
+    const auto message = websocketClient->getNextMessage();
 
-    std::vector<uint8_t> message = websocketClient->getMessage(uuidStr);
+    if (!message.has_value())
+        return nullptr;
+
+    auto vectorData = message.value();
 
     FREObject byteArrayObject = nullptr;
-    if (!message.empty()) {
+    if (!vectorData.empty()) {
         FREByteArray byteArray;
-        byteArray.length = message.size();
-        byteArray.bytes = message.data();
+        byteArray.length = vectorData.size();
+        byteArray.bytes = vectorData.data();
 
         FRENewByteArray(&byteArray, &byteArrayObject);
     }
@@ -138,15 +138,15 @@ FREObject setDebugMode(FREContext ctx, void *funcData, uint32_t argc, FREObject 
 void ContextInitializer(void *extData, const uint8_t *ctxType, FREContext ctx, uint32_t *numFunctionsToSet, const FRENamedFunction **functionsToSet) {
     writeLog("ContextInitializer called");
     static FRENamedFunction arrFunctions[] = {
-        {(const uint8_t *) "connect", NULL, &connectWebSocket},
-        {(const uint8_t *) "close", NULL, &closeWebSocket},
-        {(const uint8_t *) "sendMessage", NULL, &sendMessageWebSocket},
-        {(const uint8_t *) "getByteArrayMessage", NULL, &getByteArrayMessage},
-        {(const uint8_t *) "setDebugMode", NULL, &setDebugMode}
+        {reinterpret_cast<const uint8_t *>("connect"), nullptr, &connectWebSocket},
+        {reinterpret_cast<const uint8_t *>("close"), nullptr, &closeWebSocket},
+        {reinterpret_cast<const uint8_t *>("sendMessage"), nullptr, &sendMessageWebSocket},
+        {reinterpret_cast<const uint8_t *>("getByteArrayMessage"), nullptr, &getByteArrayMessage},
+        {reinterpret_cast<const uint8_t *>("setDebugMode"), nullptr, &setDebugMode}
     };
 
     *functionsToSet = arrFunctions;
-    *numFunctionsToSet = sizeof(arrFunctions) / sizeof(arrFunctions[0]);
+    *numFunctionsToSet = std::size(arrFunctions);
     writeLog("ContextInitializer completed");
 }
 

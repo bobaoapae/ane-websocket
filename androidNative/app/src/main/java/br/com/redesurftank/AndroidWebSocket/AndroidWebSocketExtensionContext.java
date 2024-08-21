@@ -24,34 +24,34 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
+import java.nio.ByteBuffer;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class AndroidWebSocketExtensionContext extends FREContext {
 
     private static final String CTX_NAME = "AndroidWebSocketExtensionContext";
     private String tag;
     private AndroidWebSocket _socket;
-    private Map<UUID, byte[]> _byteBuffers;
+    private Queue<byte[]> _byteBufferQueue;
 
     public AndroidWebSocketExtensionContext(String extensionName) {
         this.tag = extensionName + "." + CTX_NAME;
         AndroidWebSocketLogger.i(this.tag, "Creating context");
-        _byteBuffers = new HashMap<>();
+        _byteBufferQueue = new ConcurrentLinkedQueue<>();
     }
 
     public String getIdentifier() {
         return this.tag;
     }
 
-    public boolean addByteBuffer(UUID uuid, byte[] byteBuffer) {
-        if (_byteBuffers.containsKey(uuid)) {
-            return false;
-        }
-        _byteBuffers.put(uuid, byteBuffer);
-        return true;
+    public boolean addByteBuffer(byte[] byteBuffer) {
+        return _byteBufferQueue.add(byteBuffer);
     }
 
     @Override
@@ -268,10 +268,8 @@ public class AndroidWebSocketExtensionContext extends FREContext {
             AndroidWebSocketLogger.d(TAG, "Called getByteArrayMessage");
             try {
                 AndroidWebSocketExtensionContext context = (AndroidWebSocketExtensionContext) freContext;
-                UUID uuid = UUID.fromString(freObjects[0].getAsString());
-                byte[] byteBuffer = context._byteBuffers.remove(uuid);
+                byte[] byteBuffer = context._byteBufferQueue.poll();
                 if (byteBuffer == null) {
-                    AndroidWebSocketLogger.e(TAG, "Could not find byte buffer with UUID: " + uuid);
                     return null;
                 }
                 FREByteArray array = FREByteArray.newByteArray(byteBuffer.length);

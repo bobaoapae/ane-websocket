@@ -1,6 +1,7 @@
 #ifndef WEBSOCKETCLIENT_H
 #define WEBSOCKETCLIENT_H
 
+#include <queue>
 #include <boost/beast/ssl/ssl_stream.hpp>
 #include "FileLoggerStream.h"
 
@@ -32,6 +33,8 @@ class WebSocketClient {
 public:
     WebSocketClient();
 
+    ~WebSocketClient();
+
     void connect(const std::string& uri);
     void close(boost::beast::websocket::close_code code, const std::string& reason);
     void sendMessage(const std::string& payload);
@@ -39,8 +42,8 @@ public:
     void setFREContext(FREContext ctx);
     void setDebugMode(bool debugMode);
 
-    std::vector<uint8_t> getMessage(const std::string& uuid);
-    void storeMessage(const std::string& uuid, const std::vector<uint8_t>& message);
+    std::optional<std::vector<uint8_t>> getNextMessage();
+    void enqueueMessage(const std::vector<uint8_t>& message);
 
 private:
     bool m_open;
@@ -51,13 +54,19 @@ private:
     boost::asio::ssl::context m_ssl_context{boost::asio::ssl::context::tlsv12};
     boost::asio::ip::tcp::resolver m_resolver;
     boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>> m_ws;
-    boost::beast::flat_buffer m_buffer;
-    std::unordered_map<std::string, std::vector<uint8_t>> message_map;
+    std::vector<uint8_t> m_readBuffer;
+    boost::asio::dynamic_vector_buffer<uint8_t, std::allocator<uint8_t>> m_buffer;
     std::mutex m_lock_messages;
     std::mutex m_lock_disconnect;
     std::mutex m_lock_write;
+    std::queue<std::vector<uint8_t>> m_send_message_queue;
+    std::thread m_sending_thread;
+    std::condition_variable m_cv;
+    std::thread m_read_thread;
+    std::queue<std::vector<uint8_t>> m_received_message_queue;
 
-    void do_read();
+    void sendLoop();
+    void readLoop();
     void cleanup();
     void dispatchDisconnectEvent(const uint16_t& code, const std::string& reason);
     void dispatchEvent(const std::string& eventType, const std::string& eventData);

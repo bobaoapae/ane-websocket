@@ -140,11 +140,8 @@ public class AndroidWebSocket extends WebSocket {
                 _loc2_.writeUTFBytes(param1.level);
                 dispatchEvent(new WebSocketEvent("websocketData", WebSocket.fmtTEXT, _loc2_));
                 break;
-            case "binaryMessage":
-                dispatchEvent(new WebSocketEvent("websocketData", WebSocket.fmtBINARY, ByteArray.createFromHexString(param1.level)));
-                break;
-            case "binaryMessageFast":
-                var bytes:ByteArray = extContext.call("getByteArrayMessage", param1.level) as ByteArray;
+            case "nextMessage":
+                var bytes:ByteArray = extContext.call("getByteArrayMessage") as ByteArray;
                 if (!bytes)
                     break;
                 bytes.position = 0;

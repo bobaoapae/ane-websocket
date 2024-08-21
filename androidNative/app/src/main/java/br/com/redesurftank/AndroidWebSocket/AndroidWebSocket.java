@@ -78,13 +78,8 @@ public class AndroidWebSocket extends WebSocketClient {
     @Override
     public void onMessage(ByteBuffer bytes) {
         AndroidWebSocketLogger.d(TAG, "Callback: onBinaryMessage");
-        UUID uuid = UUID.randomUUID();
-        if (!this._context.addByteBuffer(uuid, bytes.array())) {
-            AndroidWebSocketLogger.e(TAG, "Error adding byte buffer to context");
-            this._context.dispatchStatusEventAsync("binaryMessage", encode(bytes.array()));
-            return;
-        }
-        this._context.dispatchStatusEventAsync("binaryMessageFast", uuid.toString());
+        this._context.addByteBuffer(bytes.array());
+        this._context.dispatchStatusEventAsync("nextMessage","");
     }
 
     @Override
