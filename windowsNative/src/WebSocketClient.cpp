@@ -51,12 +51,14 @@ WebSocketClient::WebSocketClient()
 }
 
 WebSocketClient::~WebSocketClient() {
-    m_open = false;
-    m_sending_thread.detach();
-    m_read_thread.detach();
+    cleanup();
 }
 
 void WebSocketClient::connect(const std::string &uri) {
+    std::thread(&WebSocketClient::connectImpl, this, uri).detach();
+}
+
+void WebSocketClient::connectImpl(const std::string &uri) {
     writeLog("connect called");
 
     try {
@@ -77,10 +79,6 @@ void WebSocketClient::connect(const std::string &uri) {
         writeLog(("Host: " + host).c_str());
         writeLog(("Target: " + target).c_str());
 
-        if (target.empty()) {
-            target = "/";
-        }
-
         if (protocol == "http" || protocol == "ws") {
             port = "80";
         } else if (protocol == "https" || protocol == "wss") {
@@ -96,119 +94,69 @@ void WebSocketClient::connect(const std::string &uri) {
 
         writeLog(("Resolved Port: " + port).c_str());
 
-        m_resolver.async_resolve(host, port, [this, protocol, host, target](auto &&PH1, auto &&PH2) { on_resolve(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2), protocol, host, target); });
+        // Resolve the host
+        auto const results = m_resolver.resolve(host, port);
 
-        std::thread([this] {
-            writeLog("Starting io_context run loop");
-            m_ioc.run();
-        }).detach();
-    } catch (std::exception const &e) {
+        // Connect to the resolved host
+        auto connectResult = boost::asio::connect(m_ws.next_layer().next_layer(), results);
+
+        // Log the connected remote endpoint
+        writeLog(("Connected to remote host: " + connectResult.address().to_string() + ":" + std::to_string(connectResult.port())).c_str());
+
+        // Retrieve and log the local endpoint
+        auto local_endpoint = m_ws.next_layer().next_layer().local_endpoint();
+        writeLog(("Local endpoint: " + local_endpoint.address().to_string() + ":" + std::to_string(local_endpoint.port())).c_str());
+
+        // Perform the SSL handshake
+        m_ws.next_layer().handshake(boost::asio::ssl::stream_base::client);
+        writeLog("SSL handshake successful");
+
+        // Perform the WebSocket handshake
+        m_ws.handshake(host + ":" + port, target);
+        writeLog("WebSocket handshake successful");
+
+        // Set the connection as open
+        m_open = true;
+
+        // Start the send and read loops
+        std::thread(&WebSocketClient::sendLoop, this).detach();
+        std::thread(&WebSocketClient::readLoop, this).detach();
+
+        dispatchEvent("connected", "Connection opened");
+    } catch (const std::exception &e) {
         writeLog(("connect exception: " + std::string(e.what())).c_str());
         dispatchEvent("error", e.what());
         cleanup();
     }
 }
 
-void WebSocketClient::on_resolve(const boost::system::error_code &ec, const boost::asio::ip::tcp::resolver::results_type &results, const std::string &protocol, const std::string &host, const std::string &target) {
-    if (ec) {
-        writeLog(("Resolve error: " + ec.message()).c_str());
-        dispatchEvent("error", "Failed to resolve host: " + ec.message());
-        cleanup();
-        return;
-    }
-
-    writeLog("Host resolved successfully");
-    get_lowest_layer(m_ws).expires_after(std::chrono::seconds(30));
-
-    get_lowest_layer(m_ws).async_connect(results, [this, protocol, host, target](auto &&PH1, auto &&PH2) { on_connect(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2), protocol, host, target); }
-    );
-}
-
-void WebSocketClient::on_connect(const boost::system::error_code &ec, const boost::asio::ip::tcp::endpoint &endpoint, const std::string &protocol, const std::string &host, const std::string &target) {
-    if (ec) {
-        writeLog(("Connect error: " + ec.message()).c_str());
-        dispatchEvent("error", "Failed to connect to host: " + ec.message());
-        cleanup();
-        return;
-    }
-
-    writeLog(("Connected to: " + endpoint.address().to_string()).c_str());
-
-    if (protocol == "https" || protocol == "wss") {
-        writeLog("Starting SSL handshake");
-        m_ws.next_layer().async_handshake(boost::asio::ssl::stream_base::client, [this, host, target](auto &&PH1) { on_ssl_handshake(std::forward<decltype(PH1)>(PH1), host, target); }
-        );
-    } else {
-        on_websocket_handshake(host, target);
-    }
-}
-
-void WebSocketClient::on_ssl_handshake(const boost::system::error_code &ec, const std::string &host, const std::string &target) {
-    if (ec) {
-        writeLog(("SSL Handshake error: " + ec.message()).c_str());
-        dispatchEvent("error", "SSL handshake failed: " + ec.message());
-        cleanup();
-        return;
-    }
-
-    writeLog("SSL handshake successful");
-    on_websocket_handshake(host, target);
-}
-
-void WebSocketClient::on_websocket_handshake(const std::string &host, const std::string &target) {
-    get_lowest_layer(m_ws).expires_never();
-
-    m_ws.set_option(boost::beast::websocket::stream_base::timeout::suggested(boost::beast::role_type::client));
-
-    m_ws.set_option(boost::beast::websocket::stream_base::decorator(
-        [](boost::beast::websocket::request_type &req) {
-            req.set(boost::beast::http::field::user_agent, std::string(BOOST_BEAST_VERSION_STRING) + " websocket-client-async");
-        }
-    ));
-
-    writeLog("Starting WebSocket handshake");
-    m_ws.async_handshake(host, target, [this](auto &&PH1) { on_websocket_handshake_complete(std::forward<decltype(PH1)>(PH1)); }
-    );
-}
-
-void WebSocketClient::on_websocket_handshake_complete(const boost::system::error_code &ec) {
-    if (ec) {
-        writeLog(("WebSocket Handshake error: " + ec.message()).c_str());
-        dispatchEvent("error", "WebSocket handshake failed: " + ec.message());
-        cleanup();
-        return;
-    }
-
-    writeLog("WebSocket handshake successful");
-
-    m_open = true;
-    dispatchEvent("connected", "Connection opened");
-    m_sending_thread = std::thread(&WebSocketClient::sendLoop, this);
-    m_read_thread = std::thread(&WebSocketClient::readLoop, this);
-}
-
 void WebSocketClient::sendLoop() {
     writeLog("sendLoop started");
     while (m_open) {
-        std::vector<uint8_t> payload; {
-            std::unique_lock lock(m_lock_write);
-            m_cv.wait(lock, [this] { return !m_send_message_queue.empty() || !m_open; });
+        try {
+            std::vector<uint8_t> payload; {
+                std::unique_lock lock(m_lock_send_queue);
+                m_cv.wait(lock, [this] { return !m_send_message_queue.empty() || !m_open; });
 
-            if (!m_open && m_send_message_queue.empty()) {
-                break;
+                if (!m_open && m_send_message_queue.empty()) {
+                    break;
+                }
+
+                payload = std::move(m_send_message_queue.front());
+                m_send_message_queue.pop();
             }
 
-            payload = std::move(m_send_message_queue.front());
-            m_send_message_queue.pop();
-        }
-
-        try {
             m_ws.binary(true);
+            writeLog("About to write payload");
             m_ws.write(boost::asio::buffer(payload));
+            writeLog("Payload written successfully");
             writeLog("Message sent successfully");
-        } catch (const std::exception &e) {
+        } catch (std::exception const &e) {
             std::string error = e.what();
-            writeLog(("sendMessage exception: " + error).c_str());
+            writeLog(("sendLoop exception: " + error).c_str());
+            dispatchDisconnectEvent(1006, "Network error during send: " + error);
+            cleanup();
+            break;
         }
     }
     writeLog("sendLoop finished");
@@ -250,7 +198,6 @@ void WebSocketClient::readLoop() {
                 m_buffer.consume(m_buffer.size());
             }
 
-            // Gera um UUID para a mensagem
             enqueueMessage(full_payload);
             dispatchEvent("nextMessage", "");
         } catch (const boost::beast::system_error &e) {
@@ -287,7 +234,7 @@ void WebSocketClient::close(const boost::beast::websocket::close_code code, cons
 }
 
 void WebSocketClient::sendMessage(const std::string &payload) {
-    writeLog("sendMessage called");
+    writeLog("sendMessage called text");
     if (m_open) {
         std::future asyncWrapper = std::async(std::launch::async, [this, payload] {
             try {
@@ -303,10 +250,10 @@ void WebSocketClient::sendMessage(const std::string &payload) {
 }
 
 void WebSocketClient::sendMessage(const std::vector<uint8_t> &payload) {
-    writeLog("sendMessage called");
+    writeLog("sendMessage called binary");
     if (m_open) {
         {
-            std::lock_guard guard(m_lock_write);
+            std::lock_guard guard(m_lock_send_queue);
             m_send_message_queue.push(payload);
         }
         m_cv.notify_one();
@@ -322,7 +269,7 @@ void WebSocketClient::setDebugMode(const bool debugMode) {
 }
 
 std::optional<std::vector<uint8_t> > WebSocketClient::getNextMessage() {
-    std::lock_guard guard(m_lock_messages);
+    std::lock_guard guard(m_lock_receive_queue);
     if (m_received_message_queue.empty()) {
         return std::nullopt;
     }
@@ -334,21 +281,58 @@ std::optional<std::vector<uint8_t> > WebSocketClient::getNextMessage() {
     return message;
 }
 
-
 void WebSocketClient::enqueueMessage(const std::vector<uint8_t> &message) {
-    std::lock_guard guard(m_lock_messages);
+    std::lock_guard guard(m_lock_receive_queue);
     m_received_message_queue.push(message);
 }
 
-
 void WebSocketClient::cleanup() {
+    std::thread(&WebSocketClient::cleanupImpl, this).detach();
+}
+
+void WebSocketClient::cleanupImpl() {
     writeLog("cleanup called");
-    m_open = false;
-    m_ioc.stop();
-    std::queue<std::vector<uint8_t> > empty;
-    std::swap(m_send_message_queue, empty);
-    std::queue<std::vector<uint8_t> > empty2;
-    std::swap(m_received_message_queue, empty2);
+    std::lock_guard lock(m_lock_cleanup); {
+        if (!m_open)
+            return;
+        m_open = false;
+    }
+
+    try {
+        m_ioc.stop();
+    } catch (std::exception const &e) {
+        writeLog(("cleanup m_ioc.stop() exception: " + std::string(e.what())).c_str());
+    }
+
+    // Limpar as filas de envio e recebimento
+    try {
+        std::lock_guard guard(m_lock_send_queue);
+        std::queue<std::vector<uint8_t> > empty_send;
+        std::swap(m_send_message_queue, empty_send);
+    } catch (std::exception const &e) {
+        writeLog(("cleanup m_send_message_queue exception: " + std::string(e.what())).c_str());
+    }
+
+    try {
+        std::lock_guard guard2(m_lock_receive_queue);
+        std::queue<std::vector<uint8_t> > empty_receive;
+        std::swap(m_received_message_queue, empty_receive);
+    } catch (std::exception const &e) {
+        writeLog(("cleanup m_received_message_queue exception: " + std::string(e.what())).c_str());
+    }
+
+
+    try {
+        m_sending_thread.detach();
+    } catch (std::exception const &e) {
+        writeLog(("cleanup m_sending_thread.detach() exception: " + std::string(e.what())).c_str());
+    }
+
+    try {
+        m_read_thread.detach();
+    } catch (std::exception const &e) {
+        writeLog(("cleanup m_read_thread.detach() exception: " + std::string(e.what())).c_str());
+    }
 }
 
 void WebSocketClient::dispatchDisconnectEvent(const uint16_t &code, const std::string &reason) {

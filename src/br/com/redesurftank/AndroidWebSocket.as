@@ -9,7 +9,6 @@ import flash.external.ExtensionContext;
 import flash.net.Socket;
 import flash.system.Capabilities;
 import flash.utils.ByteArray;
-import flash.utils.ByteArray;
 
 public class AndroidWebSocket extends WebSocket {
 
@@ -32,6 +31,8 @@ public class AndroidWebSocket extends WebSocket {
             case "AND":
                 return true;
             case "WIN":
+                return true;
+            case "MAC":
                 return true;
             default:
                 return false;

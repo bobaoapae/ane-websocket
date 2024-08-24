@@ -1,4 +1,4 @@
-<extension xmlns="http://ns.adobe.com/air/extension/51.0">
+<extension xmlns="http://ns.adobe.com/air/extension/51.1">
     <id>br.com.redesurftank.androidwebsocket</id>
     <versionNumber>1</versionNumber>
     <platforms>
@@ -29,6 +29,13 @@
         <platform name="Windows-x86">
             <applicationDeployment>
                 <nativeLibrary>AneWebSocket.dll</nativeLibrary>
+                <initializer>InitExtension</initializer>
+                <finalizer>DestroyExtension</finalizer>
+            </applicationDeployment>
+        </platform>
+        <platform name="MacOS-x86-64">
+            <applicationDeployment>
+                <nativeLibrary>WebSocketANE.framework</nativeLibrary>
                 <initializer>InitExtension</initializer>
                 <finalizer>DestroyExtension</finalizer>
             </applicationDeployment>

@@ -11,8 +11,6 @@ typedef __int32 int32_t;
 #include <WebSocketClient.h>
 #include <cstdio>
 
-static WebSocketClient *websocketClient = nullptr;
-
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
         case DLL_PROCESS_ATTACH:
@@ -41,13 +39,17 @@ FREObject connectWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObj
     const uint8_t *uri;
     FREGetObjectAsUTF8(argv[0], &uriLength, &uri);
 
+    WebSocketClient *websocketClient = nullptr;
+    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+
     if (websocketClient != nullptr) {
         websocketClient->close(boost::beast::websocket::close_code::abnormal, "Reconnecting");
-        websocketClient = nullptr;
+        delete websocketClient;
     }
 
     websocketClient = new WebSocketClient();
     websocketClient->setFREContext(ctx);
+    FRESetContextNativeData(ctx, websocketClient);
 
     websocketClient->connect(std::string(reinterpret_cast<const char *>(uri), uriLength));
 
@@ -56,16 +58,17 @@ FREObject connectWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObj
 
 FREObject closeWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
     writeLog("closeWebSocket called");
+
+    WebSocketClient *websocketClient = nullptr;
+    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+
     if (websocketClient != nullptr) {
         uint32_t closeCode = 1000; // Default close code
         if (argc > 0) {
             FREGetObjectAsUint32(argv[0], &closeCode);
         }
 
-        // Mapeia o closeCode para boost::beast::websocket::close_code
         auto beastCloseCode = static_cast<boost::beast::websocket::close_code>(closeCode);
-
-        // Fecha o WebSocket usando o código de fechamento mapeado
         websocketClient->close(beastCloseCode, "Connection closed");
     }
     return nullptr;
@@ -73,7 +76,12 @@ FREObject closeWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObjec
 
 FREObject sendMessageWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
     writeLog("sendMessageWebSocket called");
-    if (argc < 2 || websocketClient == nullptr) return nullptr;
+    if (argc < 2) return nullptr;
+
+    WebSocketClient *websocketClient = nullptr;
+    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+
+    if (websocketClient == nullptr) return nullptr;
 
     uint32_t messageType;
     FREGetObjectAsUint32(argv[0], &messageType);
@@ -102,6 +110,10 @@ FREObject sendMessageWebSocket(FREContext ctx, void *funcData, uint32_t argc, FR
 
 FREObject getByteArrayMessage(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
     writeLog("getByteArrayMessage called");
+
+    WebSocketClient *websocketClient = nullptr;
+    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+
     if (websocketClient == nullptr) return nullptr;
 
     const auto message = websocketClient->getNextMessage();
@@ -125,7 +137,12 @@ FREObject getByteArrayMessage(FREContext ctx, void *funcData, uint32_t argc, FRE
 
 FREObject setDebugMode(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
     writeLog("setDebugMode called");
-    if (argc < 1 || websocketClient == nullptr) return nullptr;
+    if (argc < 1) return nullptr;
+
+    WebSocketClient *websocketClient = nullptr;
+    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+
+    if (websocketClient == nullptr) return nullptr;
 
     uint32_t debugMode;
     FREGetObjectAsBool(argv[0], &debugMode);
@@ -150,12 +167,16 @@ void ContextInitializer(void *extData, const uint8_t *ctxType, FREContext ctx, u
     writeLog("ContextInitializer completed");
 }
 
+void ContextFinalizer(FREContext ctx) {
+    writeLog("ContextFinalizer called");
+}
+
 extern "C" {
 __declspec(dllexport) void InitExtension(void **extDataToSet, FREContextInitializer *ctxInitializerToSet, FREContextFinalizer *ctxFinalizerToSet) {
     writeLog("InitExtension called");
     *extDataToSet = nullptr;
     *ctxInitializerToSet = ContextInitializer;
-    *ctxFinalizerToSet = DestroyExtension;
+    *ctxFinalizerToSet = ContextFinalizer;
     writeLog("InitExtension completed");
 }
 

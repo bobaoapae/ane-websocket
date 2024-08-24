@@ -53,31 +53,27 @@ private:
     boost::asio::io_context m_ioc;
     boost::asio::ssl::context m_ssl_context{boost::asio::ssl::context::tlsv12};
     boost::asio::ip::tcp::resolver m_resolver;
-    boost::beast::websocket::stream<boost::beast::ssl_stream<boost::beast::tcp_stream>> m_ws;
+    boost::beast::websocket::stream<boost::beast::ssl_stream<boost::asio::ip::tcp::socket>> m_ws;
     std::vector<uint8_t> m_readBuffer;
     boost::asio::dynamic_vector_buffer<uint8_t, std::allocator<uint8_t>> m_buffer;
-    std::mutex m_lock_messages;
+    std::mutex m_lock_receive_queue;
     std::mutex m_lock_disconnect;
-    std::mutex m_lock_write;
+    std::mutex m_lock_send_queue;
+    std::mutex m_lock_cleanup;
     std::queue<std::vector<uint8_t>> m_send_message_queue;
     std::thread m_sending_thread;
     std::condition_variable m_cv;
     std::thread m_read_thread;
     std::queue<std::vector<uint8_t>> m_received_message_queue;
 
+    void connectImpl(const std::string &uri);
+    void cleanupImpl();
     void sendLoop();
     void readLoop();
     void cleanup();
     void dispatchDisconnectEvent(const uint16_t& code, const std::string& reason);
     void dispatchEvent(const std::string& eventType, const std::string& eventData);
     std::string generateUUID();
-
-    // Funções adicionais que substituem as lambdas
-    void on_resolve(const boost::system::error_code &ec, const boost::asio::ip::tcp::resolver::results_type &results, const std::string& protocol, const std::string& host, const std::string& target);
-    void on_connect(const boost::system::error_code &ec, const boost::asio::ip::tcp::endpoint &endpoint, const std::string &protocol, const std::string& host, const std::string& target);
-    void on_ssl_handshake(const boost::system::error_code &ec, const std::string &host, const std::string &target);
-    void on_websocket_handshake(const std::string &host, const std::string &target);
-    void on_websocket_handshake_complete(const boost::system::error_code &ec);
 };
 
 #endif // WEBSOCKETCLIENT_H
