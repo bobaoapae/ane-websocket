@@ -69,7 +69,7 @@ public class WebSocketClient : IDisposable
 
             _activeWebSocket = completedTask.Result;
 
-            ctxSource.Cancel(); // Cancel the other connection attempts
+            await ctxSource.CancelAsync(); // Cancel the other connection attempts
 
             _ = Task.Run(async () =>
             {
@@ -78,16 +78,19 @@ public class WebSocketClient : IDisposable
                 {
                     if (task == completedTask || task.Result is not { State: WebSocketState.Open })
                         continue;
+
                     try
                     {
                         await task.Result.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "Connection established", CancellationToken.None);
                     }
-                    catch (Exception)
+                    catch (Exception ex)
                     {
-                        //ignore
+                        _onLog?.Invoke($"Error closing secondary connection: {ex.Message}");
                     }
-
-                    task.Result.Dispose();
+                    finally
+                    {
+                        task.Result.Dispose();
+                    }
                 }
             });
 
@@ -132,11 +135,18 @@ public class WebSocketClient : IDisposable
                 Host = ipAddress // Use the IP address for the connection
             }.Uri;
 
-            await webSocket.ConnectAsync(webSocketUri, ctx);
-
-            if (webSocket.State == WebSocketState.Open)
+            try
             {
-                return webSocket;
+                await webSocket.ConnectAsync(webSocketUri, ctx);
+                if (webSocket.State == WebSocketState.Open)
+                {
+                    _onLog?.Invoke($"Successfully connected to {ipAddress}.");
+                    return webSocket;
+                }
+            }
+            catch (Exception ex)
+            {
+                _onLog?.Invoke($"Failed to connect to {ipAddress}: {ex.Message}");
             }
         }
         catch (Exception ex)
@@ -206,7 +216,7 @@ public class WebSocketClient : IDisposable
                         buffer = newBuffer;
                     }
                 } while (!result.EndOfMessage); // Keep receiving until the end of the message
-                
+
                 _onReceived?.Invoke(new ArraySegment<byte>(buffer, 0, totalBytesReceived));
                 _onLog?.Invoke("Message received.");
             }

@@ -1,10 +1,5 @@
+*.DS_Store
 *.swc
-/aneBuild/**/*.ane
 /aneBuild/**/*.swc
 /aneBuild/**/*.aar
-/aneBuild/**/*.jar
-/aneBuild/**/*.dll
-/aneBuild/**/*.so
-/aneBuild/**/*.a
-/aneBuild/**/*.framework
 /aneBuild/**/*.swf
