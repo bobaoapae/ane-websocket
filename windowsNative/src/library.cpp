@@ -1,3 +1,10 @@
+#include <iterator>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <queue>
+#include <string>
+
 #include "log.h"
 #ifdef WIN32
 #include <winsock2.h>
@@ -8,7 +15,7 @@ typedef unsigned __int8 uint8_t;
 typedef __int32 int32_t;
 #endif
 #include "library.h"
-#include <WebSocketClient.h>
+#include <CSharpLibraryWrapper.h>
 #include <cstdio>
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -31,6 +38,112 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     return TRUE;
 }
 
+class HolderCSharpWebSocket {
+private:
+    char *_guid;
+    FREContext _ctx;
+    std::queue<std::vector<uint8_t> > _messageQueue;
+    std::mutex _messageQueueMutex;
+
+public:
+    explicit HolderCSharpWebSocket(char *guid, FREContext ctx) {
+        _guid = guid;
+        _ctx = ctx;
+    }
+
+    ~HolderCSharpWebSocket() {
+        delete[] _guid;
+        std::queue<std::vector<uint8_t> > empty;
+        std::swap(_messageQueue, empty);
+    }
+
+    [[nodiscard]] char *getIdentifier() const {
+        return _guid;
+    }
+
+    [[nodiscard]] FREContext getContext() const {
+        return _ctx;
+    }
+
+    void addMessageToQueue(const std::vector<uint8_t> &message) {
+        std::lock_guard lock(_messageQueueMutex);
+        _messageQueue.push(message);
+    }
+
+    std::optional<std::vector<uint8_t> > getNextMessage() {
+        std::lock_guard lock(_messageQueueMutex);
+        if (_messageQueue.empty()) {
+            return std::nullopt;
+        }
+
+        auto message = _messageQueue.front();
+        _messageQueue.pop();
+        return message;
+    }
+};
+
+static bool alreadyInitialized = false;
+std::map<std::string, HolderCSharpWebSocket *> webSocketClients;
+
+static void connectCallback(char *guid) {
+    writeLog("connectCallback called");
+
+    auto guidString = std::string(guid);
+    writeLog(guidString.c_str());
+
+    if (webSocketClients.find(guidString) == webSocketClients.end()) {
+        writeLog("WebSocket client not found");
+        return;
+    }
+
+    HolderCSharpWebSocket *holderCSharpWEbSocket = webSocketClients[guidString];
+    FREDispatchStatusEventAsync(holderCSharpWEbSocket->getContext(), reinterpret_cast<const uint8_t *>("connected"), reinterpret_cast<const uint8_t *>(""));
+}
+
+static void dataCallback(char *guid, const uint8_t *data, int length) {
+    writeLog("dataCallback called");
+    auto guidString = std::string(guid);
+    writeLog(guidString.c_str());
+
+    if (webSocketClients.find(guidString) == webSocketClients.end()) {
+        writeLog("WebSocket client not found");
+        return;
+    }
+
+    HolderCSharpWebSocket *holderCSharpWEbSocket = webSocketClients[guidString];
+
+    auto dataCopyVector = std::vector<uint8_t>();
+    dataCopyVector.resize(length);
+    std::copy_n(data, length, dataCopyVector.begin());
+    holderCSharpWEbSocket->addMessageToQueue(dataCopyVector);
+
+    FREDispatchStatusEventAsync(holderCSharpWEbSocket->getContext(), reinterpret_cast<const uint8_t *>("nextMessage"), data);
+}
+
+static void ioErrorCallback(char *guid, int closeCode, const char *reason) {
+    writeLog("disconnectCallback called");
+
+    auto closeCodeReason = std::to_string(closeCode) + ";" + std::string(reason);
+
+    writeLog(closeCodeReason.c_str());
+
+    auto guidString = std::string(guid);
+    writeLog(guidString.c_str());
+
+    if (webSocketClients.find(guidString) == webSocketClients.end()) {
+        writeLog("WebSocket client not found");
+        return;
+    }
+
+    HolderCSharpWebSocket *holderCSharpWEbSocket = webSocketClients[guidString];
+
+    FREDispatchStatusEventAsync(holderCSharpWEbSocket->getContext(), reinterpret_cast<const uint8_t *>("disconnected"), reinterpret_cast<const uint8_t *>(closeCodeReason.c_str()));
+}
+
+static void writeLogCallback(const char *message) {
+    writeLog(message);
+}
+
 FREObject connectWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
     writeLog("connectWebSocket called");
     if (argc < 1) return nullptr;
@@ -39,37 +152,52 @@ FREObject connectWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObj
     const uint8_t *uri;
     FREGetObjectAsUTF8(argv[0], &uriLength, &uri);
 
-    WebSocketClient *websocketClient = nullptr;
-    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+    auto uriChar = reinterpret_cast<const char *>(uri);
 
-    if (websocketClient != nullptr) {
-        websocketClient->close(boost::beast::websocket::close_code::abnormal, "Reconnecting");
-        delete websocketClient;
+    writeLog("Calling connect to uri: ");
+    writeLog(uriChar);
+
+    HolderCSharpWebSocket *holderCSharpWEbSocketGuid = nullptr;
+
+    if (FRE_OK == FREGetContextNativeData(ctx, reinterpret_cast<void **>(&holderCSharpWEbSocketGuid)) && holderCSharpWEbSocketGuid != nullptr) {
+        disconnect(holderCSharpWEbSocketGuid->getIdentifier(), 1004);
+        delete holderCSharpWEbSocketGuid;
+        auto guidString = std::string(holderCSharpWEbSocketGuid->getIdentifier());
+        webSocketClients.erase(guidString);
     }
 
-    websocketClient = new WebSocketClient();
-    websocketClient->setFREContext(ctx);
-    FRESetContextNativeData(ctx, websocketClient);
+    auto newGuid = createWebSocketClient();
+    holderCSharpWEbSocketGuid = new HolderCSharpWebSocket(newGuid, ctx);
 
-    websocketClient->connect(std::string(reinterpret_cast<const char *>(uri), uriLength));
+    auto guidString = std::string(newGuid);
+    webSocketClients[guidString] = holderCSharpWEbSocketGuid;
 
-    return nullptr;
+    FRESetContextNativeData(ctx, holderCSharpWEbSocketGuid);
+
+    auto result = connect(holderCSharpWEbSocketGuid->getIdentifier(), uriChar);
+
+    if (result != 1) {
+        writeLog("Error connecting to WebSocket");
+    }
+
+    FREObject resultObject = nullptr;
+    FRENewObjectFromBool(result == 1, &resultObject);
+    return resultObject;
 }
 
 FREObject closeWebSocket(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
     writeLog("closeWebSocket called");
 
-    WebSocketClient *websocketClient = nullptr;
-    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+    HolderCSharpWebSocket *holderCSharpWEbSocketGuid = nullptr;
+    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&holderCSharpWEbSocketGuid));
 
-    if (websocketClient != nullptr) {
+    if (holderCSharpWEbSocketGuid != nullptr) {
         uint32_t closeCode = 1000; // Default close code
         if (argc > 0) {
             FREGetObjectAsUint32(argv[0], &closeCode);
         }
 
-        auto beastCloseCode = static_cast<boost::beast::websocket::close_code>(closeCode);
-        websocketClient->close(beastCloseCode, "Connection closed");
+        disconnect(holderCSharpWEbSocketGuid->getIdentifier(), static_cast<int>(closeCode));
     }
     return nullptr;
 }
@@ -78,10 +206,13 @@ FREObject sendMessageWebSocket(FREContext ctx, void *funcData, uint32_t argc, FR
     writeLog("sendMessageWebSocket called");
     if (argc < 2) return nullptr;
 
-    WebSocketClient *websocketClient = nullptr;
-    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+    HolderCSharpWebSocket *holderCSharpWEbSocketGuid = nullptr;
+    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&holderCSharpWEbSocketGuid));
 
-    if (websocketClient == nullptr) return nullptr;
+    if (holderCSharpWEbSocketGuid == nullptr) {
+        writeLog("WebSocket client context not found");
+        return nullptr;
+    }
 
     uint32_t messageType;
     FREGetObjectAsUint32(argv[0], &messageType);
@@ -90,17 +221,12 @@ FREObject sendMessageWebSocket(FREContext ctx, void *funcData, uint32_t argc, FR
     FREGetObjectType(argv[1], &objectType);
 
     if (objectType == FRE_TYPE_STRING) {
-        uint32_t payloadLength;
-        const uint8_t *payload;
-        FREGetObjectAsUTF8(argv[1], &payloadLength, &payload);
-
-        websocketClient->sendMessage(std::string(reinterpret_cast<const char *>(payload), payloadLength));
+        //TODO: Implement string message
     } else if (objectType == FRE_TYPE_BYTEARRAY) {
         FREByteArray byteArray;
         FREAcquireByteArray(argv[1], &byteArray);
 
-        const std::vector payload(byteArray.bytes, byteArray.bytes + byteArray.length);
-        websocketClient->sendMessage(payload);
+        sendMessage(holderCSharpWEbSocketGuid->getIdentifier(), byteArray.bytes, static_cast<int>(byteArray.length));
 
         FREReleaseByteArray(argv[1]);
     }
@@ -111,17 +237,21 @@ FREObject sendMessageWebSocket(FREContext ctx, void *funcData, uint32_t argc, FR
 FREObject getByteArrayMessage(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
     writeLog("getByteArrayMessage called");
 
-    WebSocketClient *websocketClient = nullptr;
-    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+    HolderCSharpWebSocket *holderCSharpWEbSocket = nullptr;
+    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&holderCSharpWEbSocket));
 
-    if (websocketClient == nullptr) return nullptr;
-
-    const auto message = websocketClient->getNextMessage();
-
-    if (!message.has_value())
+    if (holderCSharpWEbSocket == nullptr) {
+        writeLog("WebSocket client context not found");
         return nullptr;
+    }
 
-    auto vectorData = message.value();
+    auto nextMessageResult = holderCSharpWEbSocket->getNextMessage();
+
+    if (!nextMessageResult.has_value()) {
+        return nullptr;
+    }
+
+    auto vectorData = nextMessageResult.value();
 
     FREObject byteArrayObject = nullptr;
     if (!vectorData.empty()) {
@@ -139,15 +269,13 @@ FREObject setDebugMode(FREContext ctx, void *funcData, uint32_t argc, FREObject 
     writeLog("setDebugMode called");
     if (argc < 1) return nullptr;
 
-    WebSocketClient *websocketClient = nullptr;
-    FREGetContextNativeData(ctx, reinterpret_cast<void **>(&websocketClient));
+    void *websocketClient = nullptr;
+    FREGetContextNativeData(ctx, &websocketClient);
 
     if (websocketClient == nullptr) return nullptr;
 
     uint32_t debugMode;
     FREGetObjectAsBool(argv[0], &debugMode);
-
-    websocketClient->setDebugMode(debugMode);
 
     return nullptr;
 }
@@ -164,6 +292,12 @@ void ContextInitializer(void *extData, const uint8_t *ctxType, FREContext ctx, u
 
     *functionsToSet = arrFunctions;
     *numFunctionsToSet = std::size(arrFunctions);
+
+    if (!alreadyInitialized) {
+        initializerCallbacks(&connectCallback, &dataCallback, &ioErrorCallback, &writeLogCallback);
+        alreadyInitialized = true;
+    }
+
     writeLog("ContextInitializer completed");
 }
 

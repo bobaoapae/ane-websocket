@@ -29,24 +29,16 @@ link_directories(${LIBRARY_PATH})
 include_directories(${INCLUDE_PATH})
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
-find_package(Boost REQUIRED COMPONENTS thread system uuid beast)
-include_directories(${Boost_INCLUDE_DIRS})
-
-find_package(OpenSSL REQUIRED)
-
 add_library(AneWebSocket SHARED
         src/library.h
         src/library.cpp
-        src/WebSocketClient.h
-        src/WebSocketClient.cpp
         src/log.h
         src/log.cpp
-        src/FileLoggerStream.cpp
-        src/FileLoggerStream.h
+        src/CSharpLibraryWrapper.cpp
+        src/CSharpLibraryWrapper.h
 )
 
 target_link_libraries(AneWebSocket PRIVATE ${LIBRARY_PATH}/FlashRuntimeExtensions.lib)
-target_link_libraries(AneWebSocket PUBLIC ${Boost_LIBRARIES} OpenSSL::SSL PRIVATE ws2_32 bcrypt)
 
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /GL")
 set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} /LTCG /OPT:REF /OPT:ICF /DEBUG /PDBALTPATH:%_PDB%")

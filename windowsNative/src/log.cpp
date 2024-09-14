@@ -17,8 +17,7 @@ void initLog() {
 }
 
 void writeLog(const char *message) {
-    //print to console too
-    fprintf(stdout, "%s\n", message);
+    //fprintf(stdout, "%s\n", message);
     if (logFile != nullptr) {
         fprintf(logFile, "%s\n", message);
         fflush(logFile);
