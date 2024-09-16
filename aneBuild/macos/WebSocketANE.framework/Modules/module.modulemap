@@ -1,0 +1,6 @@
+framework module WebSocketANE {
+  umbrella header "WebSocketANE.h"
+  export *
+
+  module * { export * }
+}

@@ -30,12 +30,14 @@ include_directories(${INCLUDE_PATH})
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
 add_library(AneWebSocket SHARED
-        src/library.h
-        src/library.cpp
         src/log.h
         src/log.cpp
-        src/CSharpLibraryWrapper.cpp
-        src/CSharpLibraryWrapper.h
+        src/WebSocketNativeLibrary.h
+        src/WebSocketNativeLibrary.cpp
+        src/WebSocketClient.hpp
+        src/WebSocketClient.cpp
+        src/WebSocketSupport.hpp
+        src/WebSocketSupport.cpp
 )
 
 target_link_libraries(AneWebSocket PRIVATE ${LIBRARY_PATH}/FlashRuntimeExtensions.lib)
