@@ -1,10 +1,13 @@
 ﻿using System;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Threading;
@@ -13,7 +16,7 @@ using DnsClient;
 
 namespace WebSocketClientNativeLibrary;
 
-public sealed class WebSocketClient : IDisposable
+public class WebSocketClient : IDisposable
 {
     private static readonly LookupClient DnsClient = new(new LookupClientOptions(NameServer.Cloudflare, NameServer.Cloudflare2, NameServer.GooglePublicDns, NameServer.GooglePublicDns2)
     {
@@ -56,6 +59,9 @@ public sealed class WebSocketClient : IDisposable
     {
         _cancellationTokenSource = new CancellationTokenSource();
 
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, _cancellationTokenSource.Token);
+
         try
         {
             _onLog?.Invoke($"Connecting to {uri}...");
@@ -76,8 +82,8 @@ public sealed class WebSocketClient : IDisposable
 
             if (ipAddresses == null || ipAddresses.Length == 0)
             {
-                var ips4 = await ResolveUsingDoH(host, "A", _cancellationTokenSource.Token);
-                var ips6 = await ResolveUsingDoH(host, "AAAA", _cancellationTokenSource.Token);
+                var ips4 = await ResolveUsingDoH(host, "A");
+                var ips6 = await ResolveUsingDoH(host, "AAAA");
                 ipAddresses = ips4.Concat(ips6).ToArray();
             }
 
@@ -86,39 +92,22 @@ public sealed class WebSocketClient : IDisposable
                 throw new Exception("No IP addresses resolved for the domain.");
             }
 
+            ipAddresses = SortInterleaved(ipAddresses);
+
             _onLog?.Invoke($"Resolved {ipAddresses.Length} IP addresses for {host}.");
 
             // Try to connect to all resolved IPs in parallel
             var ctxSource = new CancellationTokenSource();
-            var connectionTasks = ipAddresses.Select(ip => AttemptConnectionAsync(uriObject, ip.ToString(), ctxSource.Token)).ToList();
-            var completedTask = await Task.WhenAny(connectionTasks);
 
-            _activeWebSocket = completedTask.Result;
+            var (webSocket, index) = await ParallelTask(
+                ipAddresses.Length,
+                (i, cancel) => AttemptConnectionAsync(uriObject, ipAddresses[i].ToString(), ctxSource.Token),
+                TimeSpan.FromMilliseconds(250),
+                linkedCts.Token);
+
+            _activeWebSocket = webSocket;
 
             await ctxSource.CancelAsync(); // Cancel the other connection attempts
-
-            _ = Task.Run(async () =>
-            {
-                await Task.WhenAll(connectionTasks); // Wait for all connection attempts to finish
-                foreach (var task in connectionTasks)
-                {
-                    if (task == completedTask || task.Result is not { State: WebSocketState.Open })
-                        continue;
-
-                    try
-                    {
-                        await task.Result.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "Connection established", CancellationToken.None);
-                    }
-                    catch (Exception ex)
-                    {
-                        _onLog?.Invoke($"Error closing secondary connection: {ex.Message}");
-                    }
-                    finally
-                    {
-                        task.Result.Dispose();
-                    }
-                }
-            });
 
             // Check if the connection succeeded
             if (_activeWebSocket is { State: WebSocketState.Open })
@@ -144,7 +133,142 @@ public sealed class WebSocketClient : IDisposable
         }
     }
 
-    private static async Task<IPAddress[]> ResolveUsingDoH(string host, string type, CancellationToken cancel)
+    private static IPAddress[] SortInterleaved(IPAddress[] addresses)
+    {
+        // Interleave returned addresses so that they are IPv6 -> IPv4 -> IPv6 -> IPv4.
+        // Assuming we have multiple addresses of the same type that is.
+        // As described in the RFC.
+
+        var ipv6 = addresses.Where(x => x.AddressFamily == AddressFamily.InterNetworkV6).ToArray();
+        var ipv4 = addresses.Where(x => x.AddressFamily == AddressFamily.InterNetwork).ToArray();
+
+        var commonLength = Math.Min(ipv6.Length, ipv4.Length);
+
+        var result = new IPAddress[addresses.Length];
+        for (var i = 0; i < commonLength; i++)
+        {
+            result[i * 2] = ipv6[i];
+            result[1 + i * 2] = ipv4[i];
+        }
+
+        if (ipv4.Length > ipv6.Length)
+        {
+            ipv4.AsSpan(commonLength).CopyTo(result.AsSpan(commonLength * 2));
+        }
+        else if (ipv6.Length > ipv4.Length)
+        {
+            ipv4.AsSpan(commonLength).CopyTo(result.AsSpan(commonLength * 2));
+        }
+
+        return result;
+    }
+
+    private async Task<(ClientWebSocket, int)> ParallelTask(
+        int candidateCount,
+        Func<int, CancellationToken, Task<ClientWebSocket>> taskBuilder,
+        TimeSpan delay,
+        CancellationToken cancel)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(candidateCount);
+
+        using var successCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+
+        // All tasks we have ever tried.
+        var allTasks = new List<Task<ClientWebSocket>>();
+        // Tasks we are still waiting on.
+        var tasks = new List<Task<ClientWebSocket>>();
+
+        // The general loop here is as follows:
+        // 1. Add a new task for the next IP to try.
+        // 2. Wait until any task completes OR the delay happens.
+        // If an error occurs, we stop checking that task and continue checking the next.
+        // Every iteration we add another task, until we're full on them.
+        // We keep looping until we have SUCCESS, or we run out of attempt tasks entirely.
+
+        Task<ClientWebSocket> successTask = null;
+        while ((allTasks.Count < candidateCount || tasks.Count > 0))
+        {
+            if (allTasks.Count < candidateCount)
+            {
+                // We have to queue another task this iteration.
+                var newTask = taskBuilder(allTasks.Count, successCts.Token);
+                tasks.Add(newTask);
+                allTasks.Add(newTask);
+            }
+
+            var whenAnyDone = Task.WhenAny(tasks);
+            Task<ClientWebSocket> completedTask;
+
+            if (allTasks.Count < candidateCount)
+            {
+                // If we have another one to queue, wait for a timeout instead of *just* waiting for a connection task.
+                var timeoutTask = Task.Delay(delay, successCts.Token);
+                var whenAnyOrTimeout = await Task.WhenAny(whenAnyDone, timeoutTask).ConfigureAwait(false);
+                if (whenAnyOrTimeout != whenAnyDone)
+                {
+                    // Timeout finished. Go to next iteration so we queue another one.
+                    continue;
+                }
+
+                completedTask = whenAnyDone.Result;
+            }
+            else
+            {
+                completedTask = await whenAnyDone.ConfigureAwait(false);
+            }
+
+            if (completedTask.IsCompletedSuccessfully && completedTask.Result != null)
+            {
+                // We did it. We have success.
+                successTask = completedTask;
+                break;
+            }
+            else
+            {
+                // Faulted. Remove it.
+                tasks.Remove(completedTask);
+            }
+        }
+
+        Debug.Assert(allTasks.Count > 0);
+
+        cancel.ThrowIfCancellationRequested();
+        await successCts.CancelAsync().ConfigureAwait(false);
+
+        if (successTask == null)
+        {
+            // We didn't get a single successful connection. Well heck.
+            throw new AggregateException(
+                allTasks.Where(x => x.IsFaulted).SelectMany(x => x.Exception!.InnerExceptions));
+        }
+
+        _ = Task.Run(async () =>
+        {
+            await Task.WhenAll(allTasks); // Wait for all connection attempts to finish
+            foreach (var task in allTasks)
+            {
+                if (task == successTask || task.Result is not { State: WebSocketState.Open })
+                    continue;
+
+                try
+                {
+                    await task.Result.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "Connection established", CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _onLog?.Invoke($"Error closing secondary connection: {ex.Message}");
+                }
+                finally
+                {
+                    task.Result.Dispose();
+                }
+            }
+        });
+
+        return (successTask.Result, allTasks.IndexOf(successTask));
+    }
+
+    private static async Task<IPAddress[]> ResolveUsingDoH(string host, string type)
     {
         try
         {
@@ -156,23 +280,33 @@ public sealed class WebSocketClient : IDisposable
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
 
             // Send the request and get the response
-            var response = await DohHttpClientCloudFlare.SendAsync(request, cancel).ConfigureAwait(false);
+            var response = await DohHttpClientCloudFlare.SendAsync(request).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
             // Parse the JSON result using the source generator
-            var jsonResponse = await response.Content.ReadAsStringAsync(cancel).ConfigureAwait(false);
+            var jsonResponse = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             var dnsResponse = JsonSerializer.Deserialize(jsonResponse, DnsResponseContext.Default.DnsResponse);
 
-            // Collect A and AAAA records
             var ipAddresses = dnsResponse.Answers
                 .Where(answer => answer.Type == 1 || answer.Type == 28) // 1 for A records, 28 for AAAA records
-                .Select(answer => IPAddress.Parse(answer.Data))
+                .Select(answer =>
+                {
+                    // Try to parse the IP address, handle both IPv4 and IPv6
+                    if (IPAddress.TryParse(answer.Data, out var parsedAddress))
+                    {
+                        return parsedAddress;
+                    }
+
+                    return null; // Return null for invalid IP addresses
+                })
+                .Where(ip => ip != null) // Filter out nulls (failed parses)
                 .ToArray();
 
             return ipAddresses;
         }
         catch (Exception e)
         {
+            Console.WriteLine(e);
             throw new Exception($"Failed to resolve {host} via DoH", e);
         }
     }
