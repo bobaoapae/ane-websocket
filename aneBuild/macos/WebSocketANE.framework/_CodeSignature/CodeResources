@@ -6,7 +6,7 @@
 	<dict>
 		<key>Resources/Info.plist</key>
 		<data>
-		tAk+uG0fwcgHFiaAZhC/ZfHvubY=
+		RDLRVT2tR2LM2GWpx9iLFXR2CUs=
 		</data>
 	</dict>
 	<key>files2</key>
@@ -15,7 +15,7 @@
 		<dict>
 			<key>cdhash</key>
 			<data>
-			hDiTw0DbK7XhO7CEV47pRtZa3BI=
+			eQFAKUfsVCE4h5KKsohKXNhWdhI=
 			</data>
 			<key>requirement</key>
 			<string>identifier WebSocketClientNativeLibrary and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = QZPLNQ7VA7</string>
@@ -38,7 +38,7 @@
 		<dict>
 			<key>hash2</key>
 			<data>
-			MYfYAfGOMiCeKv63rPwytGzTzWoUHk66FqQyJCajAsU=
+			ZGhANkcMGb6CoDUWAYq2PbuhP7YtY+2cKpzVpzRyT8I=
 			</data>
 		</dict>
 	</dict>
