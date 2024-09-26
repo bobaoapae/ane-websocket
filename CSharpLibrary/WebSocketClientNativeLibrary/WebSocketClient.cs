@@ -2,19 +2,30 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.WebSockets;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DnsClient;
 
 namespace WebSocketClientNativeLibrary;
 
-public class WebSocketClient : IDisposable
+public sealed class WebSocketClient : IDisposable
 {
     private static readonly LookupClient DnsClient = new(new LookupClientOptions(NameServer.Cloudflare, NameServer.Cloudflare2, NameServer.GooglePublicDns, NameServer.GooglePublicDns2)
     {
-        UseCache = true
+        UseCache = true,
+        Timeout = TimeSpan.FromSeconds(5),
+        Retries = 5
     });
+
+    private static readonly HttpClient DohHttpClientCloudFlare = new()
+    {
+        BaseAddress = new Uri("https://1.1.1.1/dns-query")
+    };
 
     private readonly ConcurrentQueue<byte[]> _sendQueue = new();
     private CancellationTokenSource _cancellationTokenSource;
@@ -52,10 +63,25 @@ public class WebSocketClient : IDisposable
             var host = uriObject.Host;
 
             // Resolve the host to multiple IPs
-            var queryResult = await DnsClient.GetHostEntryAsync(host);
-            var ipAddresses = queryResult.AddressList;
+            IPAddress[] ipAddresses = null;
+            try
+            {
+                var queryResult = await DnsClient.GetHostEntryAsync(host);
+                ipAddresses = queryResult.AddressList;
+            }
+            catch (Exception e)
+            {
+                _onLog?.Invoke($"Failed to resolve host using DnsClient: {host}\n{e}");
+            }
 
-            if (ipAddresses.Length == 0)
+            if (ipAddresses == null || ipAddresses.Length == 0)
+            {
+                var ips4 = await ResolveUsingDoH(host, "A", _cancellationTokenSource.Token);
+                var ips6 = await ResolveUsingDoH(host, "AAAA", _cancellationTokenSource.Token);
+                ipAddresses = ips4.Concat(ips6).ToArray();
+            }
+
+            if (ipAddresses == null || ipAddresses.Length == 0)
             {
                 throw new Exception("No IP addresses resolved for the domain.");
             }
@@ -115,6 +141,39 @@ public class WebSocketClient : IDisposable
         {
             _onLog?.Invoke($"Error during connection: {ex.Message}");
             await DisconnectAsync((int)WebSocketCloseStatus.InternalServerError, $"Error during connection: {ex.Message}");
+        }
+    }
+
+    private static async Task<IPAddress[]> ResolveUsingDoH(string host, string type, CancellationToken cancel)
+    {
+        try
+        {
+            // Create the request URL with query parameters (similar to the curl request)
+            var requestUrl = $"?name={host}&type={type}";
+
+            // Create the request to the DoH server
+            var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
+
+            // Send the request and get the response
+            var response = await DohHttpClientCloudFlare.SendAsync(request, cancel).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+
+            // Parse the JSON result using the source generator
+            var jsonResponse = await response.Content.ReadAsStringAsync(cancel).ConfigureAwait(false);
+            var dnsResponse = JsonSerializer.Deserialize(jsonResponse, DnsResponseContext.Default.DnsResponse);
+
+            // Collect A and AAAA records
+            var ipAddresses = dnsResponse.Answers
+                .Where(answer => answer.Type == 1 || answer.Type == 28) // 1 for A records, 28 for AAAA records
+                .Select(answer => IPAddress.Parse(answer.Data))
+                .ToArray();
+
+            return ipAddresses;
+        }
+        catch (Exception e)
+        {
+            throw new Exception($"Failed to resolve {host} via DoH", e);
         }
     }
 
@@ -267,7 +326,7 @@ public class WebSocketClient : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    protected virtual void Dispose(bool disposing)
+    private void Dispose(bool disposing)
     {
         if (!_disposed)
         {
