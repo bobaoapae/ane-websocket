@@ -25,7 +25,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 }
 
 static bool alreadyInitialized = false;
-static FRENamedFunction *exportedFunctions = new FRENamedFunction[5];
+static FRENamedFunction *exportedFunctions = new FRENamedFunction[7];
 static std::unordered_map<FREContext, WebSocketClient *> wsClientMap;
 static std::mutex wsClientMapMutex;
 
@@ -210,6 +210,42 @@ static FREObject setDebugMode(FREContext ctx, void *funcData, uint32_t argc, FRE
     return nullptr;
 }
 
+static FREObject addStaticHost(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
+    writeLog("addStaticHost called");
+    if (argc < 2) return nullptr;
+
+    uint32_t hostLength;
+    const uint8_t *host;
+    FREGetObjectAsUTF8(argv[0], &hostLength, &host);
+
+    uint32_t ipLength;
+    const uint8_t *ip;
+    FREGetObjectAsUTF8(argv[1], &ipLength, &ip);
+
+    writeLog("Calling addStaticHost with host: ");
+    writeLog(reinterpret_cast<const char *>(host));
+    writeLog(" and ip: ");
+    writeLog(reinterpret_cast<const char *>(ip));
+
+    csharpWebSocketLibrary_addStaticHost(reinterpret_cast<const char *>(host), reinterpret_cast<const char *>(ip));
+    return nullptr;
+}
+
+static FREObject removeStaticHost(FREContext ctx, void *funcData, uint32_t argc, FREObject argv[]) {
+    writeLog("removeStaticHost called");
+    if (argc < 1) return nullptr;
+
+    uint32_t hostLength;
+    const uint8_t *host;
+    FREGetObjectAsUTF8(argv[0], &hostLength, &host);
+
+    writeLog("Calling removeStaticHost with host: ");
+    writeLog(reinterpret_cast<const char *>(host));
+
+    csharpWebSocketLibrary_removeStaticHost(reinterpret_cast<const char *>(host));
+    return nullptr;
+}
+
 static void WebSocketSupportContextInitializer(
     void *extData,
     const uint8_t *ctxType,
@@ -229,12 +265,16 @@ static void WebSocketSupportContextInitializer(
         exportedFunctions[3].function = getByteArrayMessage;
         exportedFunctions[4].name = (const uint8_t *) "setDebugMode";
         exportedFunctions[4].function = setDebugMode;
+        exportedFunctions[5].name = (const uint8_t *) "addStaticHost";
+        exportedFunctions[5].function = addStaticHost;
+        exportedFunctions[6].name = (const uint8_t *) "removeStaticHost";
+        exportedFunctions[6].function = removeStaticHost;
         csharpWebSocketLibrary_initializerCallbacks((void *) &connectCallback, (void *) &dataCallback, (void *) &ioErrorCallback, (void *) &writeLogCallback);
     }
     WebSocketClient *wsClient = new WebSocketClient(ctx);
     FRESetContextNativeData(ctx, wsClient);
     setWebSocketClient(ctx, wsClient);
-    if (numFunctionsToSet) *numFunctionsToSet = 5;
+    if (numFunctionsToSet) *numFunctionsToSet = 7;
     if (functionsToSet) *functionsToSet = exportedFunctions;
 }
 

@@ -12,5 +12,7 @@ char* __cdecl csharpWebSocketLibrary_createWebSocketClient(const void* ctx);
 int __cdecl csharpWebSocketLibrary_connect(const void* guidPointer, const char* url);
 void __cdecl csharpWebSocketLibrary_sendMessage(const void* guidPointer, const void* data, int length);
 void __cdecl csharpWebSocketLibrary_disconnect(const void* guidPointer, int closeCode);
+void __cdecl csharpWebSocketLibrary_addStaticHost(const char* host, const char* ip);
+void __cdecl csharpWebSocketLibrary_removeStaticHost(const char* host);
 
 #endif /* WebSocketNativeLibrary_h */

@@ -143,3 +143,29 @@ void __cdecl csharpWebSocketLibrary_disconnect(const void *guidPointer, int clos
 
     func(guidPointer, closeCode);
 }
+
+void __cdecl csharpWebSocketLibrary_addStaticHost(const char *host, const char *ip) {
+    writeLog("addStaticHost called");
+    using AddStaticHostFunc = void (__cdecl *)(const char *, const char *);
+    auto func = reinterpret_cast<AddStaticHostFunc>(getFunctionPointer("csharpWebSocketLibrary_addStaticHost"));
+
+    if (!func) {
+        writeLog("Could not load addStaticHost function");
+        return;
+    }
+
+    func(host, ip);
+}
+
+void __cdecl csharpWebSocketLibrary_removeStaticHost(const char *host) {
+    writeLog("removeStaticHost called");
+    using RemoveStaticHostFunc = void (__cdecl *)(const char *);
+    auto func = reinterpret_cast<RemoveStaticHostFunc>(getFunctionPointer("csharpWebSocketLibrary_removeStaticHost"));
+
+    if (!func) {
+        writeLog("Could not load removeStaticHost function");
+        return;
+    }
+
+    func(host);
+}

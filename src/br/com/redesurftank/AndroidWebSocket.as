@@ -109,6 +109,14 @@ public class AndroidWebSocket extends WebSocket {
         }
     }
 
+    public function addStaticHost(host:String, ip:String):void {
+        extContext.call("addStaticHost", host, ip);
+    }
+
+    public function removeStaticHost(host:String):void {
+        extContext.call("removeStaticHost", host);
+    }
+
     public function get debugMode():Boolean {
         return _debugMode;
     }
