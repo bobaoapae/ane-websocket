@@ -164,6 +164,37 @@ public static class ExportFunctions
         }
     }
 
+    [UnmanagedCallersOnly(EntryPoint = "csharpWebSocketLibrary_addStaticHost", CallConvs = [typeof(CallConvCdecl)])]
+    public static void AddStaticHost(IntPtr hostPtr, IntPtr ipPtr)
+    {
+        try
+        {
+            var host = Marshal.PtrToStringAnsi(hostPtr);
+            var ip = Marshal.PtrToStringAnsi(ipPtr);
+
+            WebSocketClient.AddStaticHost(host, ip);
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "csharpWebSocketLibrary_removeStaticHost", CallConvs = [typeof(CallConvCdecl)])]
+    public static void RemoveStaticHost(IntPtr hostPtr)
+    {
+        try
+        {
+            var host = Marshal.PtrToStringAnsi(hostPtr);
+
+            WebSocketClient.RemoveStaticHost(host);
+        }
+        catch
+        {
+            // ignored
+        }
+    }
+
     private static void SafeInvoke(Action action)
     {
         try

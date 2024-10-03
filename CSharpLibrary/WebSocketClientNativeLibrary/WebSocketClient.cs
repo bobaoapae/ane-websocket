@@ -30,6 +30,19 @@ public class WebSocketClient : IDisposable
         BaseAddress = new Uri("https://1.1.1.1/dns-query")
     };
 
+    private static readonly ConcurrentDictionary<string, IPAddress> _staticHosts = new();
+
+    public static void AddStaticHost(string host, string ip)
+    {
+        if (IPAddress.TryParse(ip, out var parsedIp))
+            _staticHosts[host] = parsedIp;
+    }
+
+    public static void RemoveStaticHost(string host)
+    {
+        _staticHosts.TryRemove(host, out _);
+    }
+
     private readonly ConcurrentQueue<byte[]> _sendQueue = new();
     private CancellationTokenSource _cancellationTokenSource;
 
@@ -85,6 +98,12 @@ public class WebSocketClient : IDisposable
                 var ips4 = await ResolveUsingDoH(host, "A");
                 var ips6 = await ResolveUsingDoH(host, "AAAA");
                 ipAddresses = ips4.Concat(ips6).ToArray();
+            }
+
+            if (ipAddresses.Length == 0 && _staticHosts.TryGetValue(host, out var staticIp))
+            {
+                _onLog?.Invoke($"Found static host: {host}");
+                ipAddresses = [staticIp];
             }
 
             if (ipAddresses == null || ipAddresses.Length == 0)
@@ -277,7 +296,7 @@ public class WebSocketClient : IDisposable
 
             // Create the request to the DoH server
             var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
+            request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/dns-json"));
 
             // Send the request and get the response
             var response = await DohHttpClientCloudFlare.SendAsync(request).ConfigureAwait(false);
@@ -286,6 +305,9 @@ public class WebSocketClient : IDisposable
             // Parse the JSON result using the source generator
             var jsonResponse = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             var dnsResponse = JsonSerializer.Deserialize(jsonResponse, DnsResponseContext.Default.DnsResponse);
+
+            if (dnsResponse.Answers == null)
+                return [];
 
             var ipAddresses = dnsResponse.Answers
                 .Where(answer => answer.Type == 1 || answer.Type == 28) // 1 for A records, 28 for AAAA records
@@ -304,10 +326,9 @@ public class WebSocketClient : IDisposable
 
             return ipAddresses;
         }
-        catch (Exception e)
+        catch (Exception)
         {
-            Console.WriteLine(e);
-            throw new Exception($"Failed to resolve {host} via DoH", e);
+            return [];
         }
     }
 
