@@ -21,13 +21,14 @@ public class WebSocketClient : IDisposable
     private static readonly LookupClient DnsClient = new(new LookupClientOptions(NameServer.Cloudflare, NameServer.Cloudflare2, NameServer.GooglePublicDns, NameServer.GooglePublicDns2)
     {
         UseCache = true,
-        Timeout = TimeSpan.FromSeconds(5),
-        Retries = 5
+        Timeout = TimeSpan.FromMilliseconds(150),
+        Retries = 1,
     });
 
     private static readonly HttpClient DohHttpClientCloudFlare = new()
     {
-        BaseAddress = new Uri("https://1.1.1.1/dns-query")
+        BaseAddress = new Uri("https://1.1.1.1/dns-query"),
+        Timeout = TimeSpan.FromMilliseconds(250)
     };
 
     private static readonly ConcurrentDictionary<string, IPAddress> _staticHosts = new();
@@ -72,7 +73,7 @@ public class WebSocketClient : IDisposable
     {
         _cancellationTokenSource = new CancellationTokenSource();
 
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, _cancellationTokenSource.Token);
 
         try
