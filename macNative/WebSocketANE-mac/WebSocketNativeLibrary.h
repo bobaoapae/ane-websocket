@@ -13,6 +13,8 @@ extern "C" {
     __cdecl int csharpWebSocketLibrary_connect(const void* guidPointer, const char* url);
     __cdecl void csharpWebSocketLibrary_sendMessage(const void* guidPointer, const void* data, int length);
     __cdecl void csharpWebSocketLibrary_disconnect(const void* guidPointer, int closeCode);
+    __cdecl void csharpWebSocketLibrary_addStaticHost(const char* host, const char* ip);
+    __cdecl void csharpWebSocketLibrary_removeStaticHost(const char* host);
 }
 
 #endif /* WebSocketNativeLibrary_h */
