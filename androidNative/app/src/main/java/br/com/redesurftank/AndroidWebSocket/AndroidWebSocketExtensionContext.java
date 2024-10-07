@@ -46,7 +46,7 @@ public class AndroidWebSocketExtensionContext extends FREContext {
     private String tag;
     private AndroidWebSocket _socket;
     private Queue<byte[]> _byteBufferQueue;
-    private Map<String, String> _staticHosts = new HashMap<>();
+    private Map<String, List<String>> _staticHosts;
 
     public AndroidWebSocketExtensionContext(String extensionName) {
         this.tag = extensionName + "." + CTX_NAME;
@@ -133,9 +133,14 @@ public class AndroidWebSocketExtensionContext extends FREContext {
 
                         if (addresses.isEmpty()) {
                             synchronized (context._staticHosts) {
-                                String ip = context._staticHosts.get(uri.getHost());
-                                if (ip != null) {
-                                    addresses.add(InetAddress.getByName(ip));
+                                if (context._staticHosts.containsKey(uri.getHost())) {
+                                    for (String ip : context._staticHosts.get(uri.getHost())) {
+                                        try {
+                                            addresses.add(InetAddress.getByName(ip));
+                                        } catch (UnknownHostException e) {
+                                            AndroidWebSocketLogger.e(TAG, "Failure in resolve() : " + e.getMessage(), e);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -472,7 +477,11 @@ public class AndroidWebSocketExtensionContext extends FREContext {
                 String ip = freObjects[1].getAsString();
 
                 synchronized (context._staticHosts) {
-                    context._staticHosts.put(host, ip);
+                    if (!context._staticHosts.containsKey(host)) {
+                        context._staticHosts.put(host, new ArrayList<>());
+                    }
+
+                    context._staticHosts.get(host).add(ip);
                 }
 
                 return FREObject.newObject(true);
