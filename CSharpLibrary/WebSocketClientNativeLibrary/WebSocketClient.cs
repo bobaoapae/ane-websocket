@@ -31,17 +31,30 @@ public class WebSocketClient : IDisposable
         Timeout = TimeSpan.FromMilliseconds(250)
     };
 
-    private static readonly ConcurrentDictionary<string, IPAddress> _staticHosts = new();
+    private static readonly Dictionary<string, List<IPAddress>> _staticHosts = new();
 
     public static void AddStaticHost(string host, string ip)
     {
-        if (IPAddress.TryParse(ip, out var parsedIp))
-            _staticHosts[host] = parsedIp;
+        if (!IPAddress.TryParse(ip, out var parsedIp))
+        {
+            return;
+        }
+
+        lock (_staticHosts)
+        {
+            if (!_staticHosts.ContainsKey(host))
+                _staticHosts[host] = new List<IPAddress>();
+
+            _staticHosts[host].Add(parsedIp);
+        }
     }
 
     public static void RemoveStaticHost(string host)
     {
-        _staticHosts.TryRemove(host, out _);
+        lock (_staticHosts)
+        {
+            _staticHosts.Remove(host);
+        }
     }
 
     private readonly ConcurrentQueue<byte[]> _sendQueue = new();
@@ -101,10 +114,16 @@ public class WebSocketClient : IDisposable
                 ipAddresses = ips4.Concat(ips6).ToArray();
             }
 
-            if (ipAddresses.Length == 0 && _staticHosts.TryGetValue(host, out var staticIp))
+            if (ipAddresses.Length == 0)
             {
-                _onLog?.Invoke($"Found static host: {host}");
-                ipAddresses = [staticIp];
+                lock (_staticHosts)
+                {
+                    if (_staticHosts.TryGetValue(host, out var staticIp))
+                    {
+                        ipAddresses = staticIp.ToArray();
+                        _onLog?.Invoke($"Found static host: {host}");
+                    }
+                }
             }
 
             if (ipAddresses == null || ipAddresses.Length == 0)
@@ -297,7 +316,7 @@ public class WebSocketClient : IDisposable
 
             // Create the request to the DoH server
             var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-            request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/dns-json"));
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/dns-json"));
 
             // Send the request and get the response
             var response = await DohHttpClientCloudFlare.SendAsync(request).ConfigureAwait(false);
