@@ -45,8 +45,8 @@ public class AndroidWebSocketExtensionContext extends FREContext {
     private static final String CTX_NAME = "AndroidWebSocketExtensionContext";
     private String tag;
     private AndroidWebSocket _socket;
-    private Queue<byte[]> _byteBufferQueue;
-    private Map<String, List<String>> _staticHosts;
+    private final Queue<byte[]> _byteBufferQueue;
+    private static final Map<String, List<String>> _staticHosts = new HashMap<>();
 
     public AndroidWebSocketExtensionContext(String extensionName) {
         this.tag = extensionName + "." + CTX_NAME;
