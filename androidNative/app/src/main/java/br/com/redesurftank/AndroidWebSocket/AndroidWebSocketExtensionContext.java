@@ -145,6 +145,10 @@ public class AndroidWebSocketExtensionContext extends FREContext {
                             }
                         }
 
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            addresses.sort(new InetAddressComparator());
+                        }
+
                         if (!addresses.isEmpty()) {
                             for (InetAddress address : addresses) {
                                 SocketAddress socketAddress = new InetSocketAddress(address, port);
