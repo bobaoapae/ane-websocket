@@ -34,6 +34,8 @@ public class AndroidWebSocket extends WebSocket {
                 return true;
             case "MAC":
                 return true;
+            case "IOS":
+                return true;
             default:
                 return false;
         }
